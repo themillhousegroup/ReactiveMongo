@@ -32,6 +32,8 @@ import reactivemongo.core.protocol.{
   ResponseFrameDecoder
 }
 import reactivemongo.api.{ MongoConnectionOptions, ReadPreference }
+import javax.net.ssl.{ SNIHostName, SNIServerName, SSLParameters }
+import java.util
 
 package object utils {
   def updateFirst[A, M[T] <: Iterable[T]](coll: M[A])(f: A => Option[A])(implicit cbf: CanBuildFrom[M[_], A, M[A]]): M[A] = {
@@ -617,7 +619,7 @@ final class ChannelFactory private[reactivemongo] (
   private val timer = new HashedWheelTimer()
 
   def create(host: String = "localhost", port: Int = 27017, receiver: ActorRef): Channel = {
-    val channel = makeChannel(receiver)
+    val channel = makeChannel(host, port, receiver)
     logger.trace(s"[$supervisor/$connection] Created a new channel: $channel")
     channel
   }
@@ -630,7 +632,7 @@ final class ChannelFactory private[reactivemongo] (
     java.nio.ByteOrder.LITTLE_ENDIAN
   )
 
-  private def makePipeline(timeoutMS: Long, receiver: ActorRef): ChannelPipeline = {
+  private def makePipeline(host: String, port: Int, timeoutMS: Long, receiver: ActorRef): ChannelPipeline = {
     val idleHandler = new IdleStateHandler(
       timer, 0, 0, timeoutMS, TimeUnit.MILLISECONDS
     )
@@ -644,6 +646,12 @@ final class ChannelFactory private[reactivemongo] (
       val sslEng = {
         val engine = sslContext.createSSLEngine()
         engine.setUseClientMode(true)
+
+        val sslParameters = new SSLParameters()
+        val hostnames = new util.ArrayList[SNIServerName]()
+        hostnames.add(new SNIHostName(host))
+        sslParameters.setServerNames(hostnames)
+        engine.setSSLParameters(sslParameters)
         engine
       }
 
@@ -704,9 +712,12 @@ final class ChannelFactory private[reactivemongo] (
     sslCtx
   }
 
-  private def makeChannel(receiver: ActorRef): Channel = {
+  private def makeChannel(host: String, port: Int, receiver: ActorRef): Channel = {
     val channel = channelFactory.newChannel(makePipeline(
-      options.maxIdleTimeMS.toLong, receiver
+      host,
+      port,
+      options.maxIdleTimeMS.toLong,
+      receiver
     ))
     val config = channel.getConfig
 
